@@ -9,3 +9,5 @@
 /wa-source
 yarn.lock
 wppconnect/
+
+.history/
