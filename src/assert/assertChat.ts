@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { chat as Chat } from '../';
+import { find } from '../chat/functions/find';
+import { get } from '../chat/functions/get';
 import { WPPError } from '../util';
 import { ChatModel, NewsletterStore, Wid } from '../whatsapp';
 
@@ -25,7 +26,7 @@ export class InvalidChat extends WPPError {
 }
 
 export async function assertFindChat(id: string | Wid): Promise<ChatModel> {
-  const chat = await (Chat as any).find(id);
+  const chat = await find(id);
 
   if (!chat) {
     throw new InvalidChat(id);
@@ -39,7 +40,7 @@ export function assertGetChat(id: string | Wid): ChatModel {
   if (id.toString().includes('newsletter')) {
     chat = NewsletterStore.get(id);
   } else {
-    chat = (Chat as any).get(id);
+    chat = get(id);
   }
 
   if (!chat) {

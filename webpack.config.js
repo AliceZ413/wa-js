@@ -5,8 +5,11 @@ const packageJSON = require('./package.json');
 
 module.exports = (env, argv) => {
   const isDevelopment = argv.mode === 'development';
+  const isSlim = Boolean(env.slim);
+  const srcPath = path.resolve(__dirname, 'src');
+
   return {
-    entry: './src/index.ts',
+    entry: isSlim ? './src/index.slim.ts' : './src/index.ts',
     mode: isDevelopment ? 'development' : 'production',
     module: {
       rules: [
@@ -22,9 +25,35 @@ module.exports = (env, argv) => {
       fallback: {
         fs: false,
       },
+      ...(isSlim
+        ? {
+            alias: {
+              [path.join(srcPath, 'gtag/index.ts')]: path.join(
+                srcPath,
+                'gtag/stub.ts'
+              ),
+              [path.join(srcPath, 'eventEmitter/eventTypes.ts')]: path.join(
+                srcPath,
+                'eventEmitter/eventTypes.slim.ts'
+              ),
+              [path.join(srcPath, 'chat/index.ts')]: path.join(
+                srcPath,
+                'chat/index.slim.ts'
+              ),
+              [path.join(srcPath, 'chat/functions/index.ts')]: path.join(
+                srcPath,
+                'chat/functions/index.slim.ts'
+              ),
+              [path.join(srcPath, 'chat/events/index.ts')]: path.join(
+                srcPath,
+                'chat/events/index.slim.ts'
+              ),
+            },
+          }
+        : {}),
     },
     output: {
-      filename: 'wppconnect-wa.js',
+      filename: isSlim ? 'wppconnect-wa.slim.js' : 'wppconnect-wa.js',
       path: path.resolve(__dirname, 'dist'),
       library: {
         name: 'WPP',

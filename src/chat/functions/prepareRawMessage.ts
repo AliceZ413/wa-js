@@ -16,7 +16,7 @@
 
 import { assertWid } from '../../assert';
 import { getMyUserLid, getMyUserWid } from '../../conn';
-import { getParticipants } from '../../group';
+import { ensureGroup } from '../../group/functions/ensureGroup';
 import { WPPError } from '../../util';
 import {
   BotProfileStore,
@@ -161,9 +161,10 @@ export async function prepareRawMessage<T extends RawMessage>(
     const ids = text?.match(/(?<=@)(\d+)\b/g) || [];
 
     if (ids.length > 0) {
-      const participants = (await getParticipants(chat.id)).map((p) =>
-        p.id.toString()
-      );
+      const groupChat = await ensureGroup(chat.id);
+      const participants = groupChat
+        .groupMetadata!.participants.getModelsArray()
+        .map((p) => p.id.toString());
 
       for (const id of ids) {
         const lidWid = `${id}@lid`;

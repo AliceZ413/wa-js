@@ -17,9 +17,8 @@
 import Debug from 'debug';
 
 import { assertFindChat } from '../../assert';
-import { getAnnouncementGroup } from '../../community';
 import { WPPError } from '../../util';
-import { GroupMetadataStore, MsgModel } from '../../whatsapp';
+import { GroupMetadataStore, MsgModel, Wid } from '../../whatsapp';
 import { ACK } from '../../whatsapp/enums';
 import {
   addAndSendMessageEdit,
@@ -39,6 +38,36 @@ import {
 import { getMessageById, markIsRead, prepareRawMessage } from '.';
 
 const debug = Debug('WA-JS:message');
+
+function getSubgroups(communityId: string | Wid): Wid[] {
+  const groupData = GroupMetadataStore.get(communityId.toString());
+  if (!groupData) {
+    throw new WPPError(
+      'group_not_exist',
+      `GroupId ${communityId?.toString()} not exists`
+    );
+  }
+
+  if (groupData.joinedSubgroups?.length > 0) {
+    return groupData.joinedSubgroups;
+  }
+
+  const parentGroupData = GroupMetadataStore.get(
+    groupData.parentGroup?.toString()
+  )!;
+  return parentGroupData.joinedSubgroups;
+}
+
+function getAnnouncementGroup(communityId: string | Wid): Wid | undefined {
+  const allGroups = getSubgroups(communityId);
+  for (const group of allGroups) {
+    const groupData = GroupMetadataStore.get(group.toString());
+    if (groupData?.groupType == 'LINKED_ANNOUNCEMENT_GROUP') {
+      return groupData.id;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Send a raw message
