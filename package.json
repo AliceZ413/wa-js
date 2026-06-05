@@ -22,6 +22,8 @@
   "scripts": {
     "build:dev": "webpack --devtool inline-source-map --mode development",
     "build:prd": "webpack",
+    "build:slim:dev": "webpack --env slim --devtool inline-source-map --mode development",
+    "build:slim:prd": "webpack --env slim",
     "changelog:last": "conventional-changelog -n ./changelog.config.cjs -r 2",
     "changelog:preview": "conventional-changelog -n ./changelog.config.cjs -u",
     "changelog:update": "conventional-changelog -n ./changelog.config.cjs -i CHANGELOG.md -s -r 0",
