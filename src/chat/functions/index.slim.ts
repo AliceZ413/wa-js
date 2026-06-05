@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export { closeChat } from './closeChat';
 export { downloadMedia } from './downloadMedia';
 export { find } from './find';
 export { generateMessageID } from './generateMessageID';
@@ -44,3 +45,4 @@ export {
 } from './sendFileMessage';
 export { sendRawMessage } from './sendRawMessage';
 export { sendTextMessage, TextMessageOptions } from './sendTextMessage';
+export { setInputText } from './setInputText';
