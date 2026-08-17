@@ -18,6 +18,7 @@ import Debug from 'debug';
 
 import { internalEv } from '../eventEmitter';
 import { META_MODULE_ID_BLACKLIST } from './blacklist';
+import { LAZY_MODULES, MAX_DISCOVERED_COMPONENTS } from './lazyModules';
 
 const debug = Debug('WA-JS:loader');
 
@@ -143,6 +144,50 @@ async function waitUntil<T>(
 }
 
 /**
+ * Wait until WhatsApp's Meta module graph stops growing for a quiet window.
+ *
+ * On a cold load (empty cache / hard reload / reconnection) WhatsApp registers
+ * its modules progressively, often well after the loader is injected. Firing
+ * `loader.injected` too early runs the onInjected callbacks — e.g.
+ * `registerStreamEvent`, which does `Stream.on('change:mode', ...)` — before
+ * their store modules exist, permanently pinning those getters to `undefined`.
+ * That breaks the `conn.stream_mode_changed` -> `conn.main_ready` chain, so
+ * `isFullReady`/`isReady` never become true (root cause of #3419 / #3481).
+ *
+ * Waiting for the module set to settle lets those callbacks see live modules.
+ */
+async function waitForMetaModulesSettle({
+  quiet = 750,
+  timeout = 20_000,
+  poll = 100,
+}: { quiet?: number; timeout?: number; poll?: number } = {}): Promise<void> {
+  const moduleCount = (): number => {
+    try {
+      return Object.keys(__debug().modulesMap).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  const deadline = Date.now() + timeout;
+  let last = moduleCount();
+  let lastChangeAt = Date.now();
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, poll));
+    const current = moduleCount();
+    if (current !== last) {
+      last = current;
+      lastChangeAt = Date.now();
+    } else if (current > 0 && Date.now() - lastChangeAt >= quiet) {
+      debug(`meta modules settled at ${current} (quiet ${quiet}ms)`);
+      return;
+    }
+  }
+  debug(`meta modules settle timed out after ${timeout}ms (count ${last})`);
+}
+
+/**
  * Install setter traps on `global.__d` and `global.require` so the Meta
  * loader is started the moment WhatsApp assigns either of those globals.
  *
@@ -221,6 +266,13 @@ async function runMetaLoader(global: any): Promise<void> {
   Object.defineProperty(moduleRequire, 'm', {
     get: () => buildMetaModulesMap(),
   });
+
+  // Cold-load fix (#3419 / #3481): wait for WhatsApp's module graph to settle
+  // before firing the injected callbacks. Otherwise store getters accessed by
+  // those callbacks (e.g. registerStreamEvent's `Stream.on(...)`) get pinned to
+  // `undefined` while their module is still pending registration, which breaks
+  // the `conn.main_ready` chain and leaves `isReady` stuck at false.
+  await waitForMetaModulesSettle();
 
   isInjected = true;
   debug('injected');
@@ -427,6 +479,14 @@ function moduleLooksLikeReact(module: any): boolean {
 
 // Cache for searchId results based on condition function reference
 const searchIdCache = new Map<SearchModuleCondition, string | null>();
+// For negative (null) results we also remember how many modules were registered
+// at the time of the miss. WhatsApp Web (>= 2.3000, Meta loader) registers its
+// modules progressively, often well after the loader is injected, so a finder
+// that runs early can miss a module that simply hasn't been registered yet.
+// Caching that miss permanently means the binding never recovers even after the
+// module loads (root cause of #3419). We therefore only trust a cached null
+// while the module set is unchanged, and re-scan once new modules appear.
+const searchIdMissModuleCount = new Map<SearchModuleCondition, number>();
 
 function isReactResolvedCached(moduleId: string, module: any): boolean {
   if (pureComponentMap.has(moduleId)) {
@@ -541,9 +601,21 @@ export function searchId(
   reverse = false,
   hint?: string | RegExp
 ): string | null {
-  // Check cache first
-  if (searchIdCache.has(condition)) {
-    return searchIdCache.get(condition)!;
+  // Check cache first. Positive results are stable; a cached null is only
+  // trustworthy while no new modules have registered since the miss — otherwise
+  // the module we wanted may have loaded in the meantime (#3419).
+  const cached = searchIdCache.get(condition);
+  if (cached) {
+    return cached;
+  }
+  if (cached === null) {
+    if (
+      searchIdMissModuleCount.get(condition) ===
+      Object.keys(moduleRequire.m).length
+    ) {
+      return null;
+    }
+    // Stale negative cache: new modules appeared, fall through and re-scan.
   }
 
   const allIds = Object.keys(moduleRequire.m);
@@ -618,6 +690,9 @@ export function searchId(
   clearTimeout(timer);
   debug(`Module not found: ${condition.toString()}`);
   searchIdCache.set(condition, null);
+  // Remember the module count at miss time so the cached null is re-evaluated
+  // once WhatsApp registers more modules (see searchIdMissModuleCount above).
+  searchIdMissModuleCount.set(condition, allIds.length);
   return null;
 }
 
@@ -709,4 +784,195 @@ export function injectFallbackModule(
   }
 
   fallbackModules[`fallback_${moduleId}`] = content;
+}
+
+/**
+ * WhatsApp's Bootloader: the runtime that fetches resource bundles on demand.
+ * Only exists on the Meta loader (WA >= 2.3000).
+ */
+interface Bootloader {
+  /**
+   * Fetch the resource bundles of `components` and require them, then invoke
+   * `callback`. Throws synchronously for a name that is not a known component.
+   */
+  loadModules(
+    components: string[],
+    callback: () => void,
+    context: string
+  ): unknown;
+  __debug?: {
+    /** Component name -> the resources its bundle is made of. */
+    componentMap?: Map<string, unknown>;
+  };
+}
+
+/** Components already handed to the Bootloader, so we never refetch one. */
+const bootloadedComponents = new Set<string>();
+
+/** In-flight {@link ensureLazyModule} calls, keyed by module id. */
+const ensureLazyModulePromises = new Map<string, Promise<boolean>>();
+
+function getBootloader(): Bootloader | null {
+  try {
+    // `moduleRequire` goes through `importNamespace`, which wraps a CommonJS
+    // module as `{ default: exports }`, so accept either shape.
+    const module = moduleRequire<any>('Bootloader');
+    const bootloader: Bootloader | undefined =
+      typeof module?.loadModules === 'function' ? module : module?.default;
+
+    return typeof bootloader?.loadModules === 'function' ? bootloader : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+/**
+ * Whether `moduleId` is currently in the registry `searchId` scans.
+ */
+function isModuleRegistered(moduleId: string): boolean {
+  try {
+    return moduleId in moduleRequire.m;
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
+ * Components to try for a lazy module: the recorded ones that still exist,
+ * followed by a bounded set rediscovered from the live component map.
+ */
+function candidateComponents(moduleId: string): string[] {
+  const source = LAZY_MODULES[moduleId];
+
+  if (!source) {
+    return [];
+  }
+
+  const componentMap = getBootloader()?.__debug?.componentMap;
+
+  if (!componentMap || typeof componentMap.keys !== 'function') {
+    return source.components;
+  }
+
+  const candidates = source.components.filter((name) => componentMap.has(name));
+
+  if (source.pattern) {
+    let discovered = 0;
+
+    for (const name of componentMap.keys()) {
+      if (discovered >= MAX_DISCOVERED_COMPONENTS) {
+        break;
+      }
+      if (source.pattern.test(name) && !candidates.includes(name)) {
+        candidates.push(name);
+        discovered++;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function bootloadComponent(
+  bootloader: Bootloader,
+  component: string,
+  timeout = 30_000
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Bootloader timed out loading '${component}'`));
+    }, timeout);
+
+    try {
+      bootloader.loadModules(
+        [component],
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        },
+        'WA-JS'
+      );
+    } catch (error) {
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Make sure a module that ships in a lazily bootloaded bundle is registered.
+ *
+ * WhatsApp Web >= 2.3000 splits its module graph into resource bundles the
+ * Bootloader fetches on demand, so a module whose bundle the session never
+ * needed is absent from the registry and `searchId()` can never find it — the
+ * binding stays `undefined` for the whole life of the page no matter how often
+ * it is retried. Call this before using such a binding: it asks WhatsApp to
+ * fetch the bundle exactly like the UI would, which registers the module and
+ * lets the existing lazy getters resolve.
+ *
+ * Best-effort by design. Returns whether `moduleId` is registered when it
+ * finishes; `false` on the legacy webpack loader (where nothing is lazy) and
+ * for modules absent from {@link LAZY_MODULES}. Each component is fetched at
+ * most once per page, so repeated calls after a failure cost nothing.
+ *
+ * @param moduleId The module the caller needs
+ */
+export function ensureLazyModule(moduleId: string): Promise<boolean> {
+  if (isModuleRegistered(moduleId)) {
+    return Promise.resolve(true);
+  }
+
+  let pending = ensureLazyModulePromises.get(moduleId);
+
+  if (!pending) {
+    pending = resolveLazyModule(moduleId).finally(() => {
+      ensureLazyModulePromises.delete(moduleId);
+    });
+    ensureLazyModulePromises.set(moduleId, pending);
+  }
+
+  return pending;
+}
+
+async function resolveLazyModule(moduleId: string): Promise<boolean> {
+  if (loaderType !== 'meta') {
+    return false;
+  }
+
+  const bootloader = getBootloader();
+
+  if (!bootloader) {
+    debug(`Bootloader unavailable, cannot load '${moduleId}'`);
+    return false;
+  }
+
+  for (const component of candidateComponents(moduleId)) {
+    if (bootloadedComponents.has(component)) {
+      continue;
+    }
+    bootloadedComponents.add(component);
+
+    debug(`Bootloading '${component}' to register '${moduleId}'`);
+
+    try {
+      await bootloadComponent(bootloader, component);
+    } catch (error) {
+      debug(`Bootloading '${component}' failed: ${error}`);
+      continue;
+    }
+
+    if (isModuleRegistered(moduleId)) {
+      debug(`'${moduleId}' registered by '${component}'`);
+      return true;
+    }
+  }
+
+  return isModuleRegistered(moduleId);
 }
