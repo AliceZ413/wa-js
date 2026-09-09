@@ -54,6 +54,20 @@ export interface LazyModuleSource {
 export const LAZY_MODULES: {
   readonly [moduleId: string]: LazyModuleSource;
 } = {
+  // Verified on a cold QR page in WA 2.3000.1046899131. These components
+  // register the original exports without opening UI or invoking actions.
+  WAWebGenerateEventCallLink: {
+    components: ['WAWebEventsCreateEventModalFlow.react'],
+    pattern: /EventsCreateEvent/,
+  },
+  WAWebGroupGetCommunityParticipantsJob: {
+    components: ['WAWebViewCommunityMembersModal.react'],
+    pattern: /ViewCommunityMembers/,
+  },
+  WAWebSetPrivacyForOneCategoryAction: {
+    components: ['WAWebPrivacyVisibilityEditDrawer.react'],
+    pattern: /PrivacyVisibility/,
+  },
   // Both forward modules ship in the same bundle, so either entry recovers
   // the other. `WAWebMediaForwardMediaMsg` is preferred because it is a plain
   // utility module: requiring it has no UI side effects, unlike the `.react`
@@ -73,6 +87,18 @@ export const LAZY_MODULES: {
       'WAWebForwardMessageModal.react',
     ],
     pattern: /forward/i,
+  },
+  // Moved out of the eagerly loaded bundles in WA ~2.3000.1045986927. Only
+  // `.react` flows pull this bundle, so there is no side-effect-free utility
+  // component to prefer; `WAWebDeactivateCommunityDrawer.react` is first
+  // because its bundle set is by far the smallest (18 chunks against 39+).
+  WAWebGroupCommunityJob: {
+    components: [
+      'WAWebDeactivateCommunityDrawer.react',
+      'WAWebCommunityFlow.react',
+      'WAWebNewGroupFlow.react',
+    ],
+    pattern: /communit/i,
   },
 };
 
