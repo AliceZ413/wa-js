@@ -68,6 +68,16 @@ export const LAZY_MODULES: {
     components: ['WAWebPrivacyVisibilityEditDrawer.react'],
     pattern: /PrivacyVisibility/,
   },
+  // The profile drawer registers the setter without changing the profile.
+  WAWebSetPushnameConnAction: {
+    components: ['WAWebProfileDrawer.react'],
+    pattern: /^WAWebProfileDrawer/,
+  },
+  // The new-group flow registers createGroup without creating a group.
+  WAWebGroupCreateJob: {
+    components: ['WAWebNewGroupFlow.react'],
+    pattern: /NewGroupFlow/,
+  },
   // Both forward modules ship in the same bundle, so either entry recovers
   // the other. `WAWebMediaForwardMediaMsg` is preferred because it is a plain
   // utility module: requiring it has no UI side effects, unlike the `.react`
@@ -99,6 +109,18 @@ export const LAZY_MODULES: {
       'WAWebNewGroupFlow.react',
     ],
     pattern: /communit/i,
+  },
+  // Verified on WA 2.3000.1047548844: a session that never opens the group
+  // "Invite via link" drawer registers neither module. Bootloading
+  // `WAWebGroupInviteLinkDrawer.react` registers both, since they ship in the
+  // same resource bundle.
+  WAWebMexFetchGroupInviteCodeJob: {
+    components: ['WAWebGroupInviteLinkDrawer.react'],
+    pattern: /GroupInvite/i,
+  },
+  WAWebGroupInviteJob: {
+    components: ['WAWebGroupInviteLinkDrawer.react'],
+    pattern: /GroupInvite/i,
   },
 };
 

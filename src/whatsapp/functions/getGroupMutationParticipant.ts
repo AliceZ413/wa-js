@@ -1,5 +1,5 @@
 /*!
- * Copyright 2026 WPPConnect Team
+ * Copyright 2023 WPPConnect Team
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,20 @@
 
 import { exportModule } from '../exportModule';
 import { Wid } from '../misc';
+import { ContactModel } from '../models';
 
-/**
- * @whatsapp WAWebVoipStartCall
- */
-export declare function startWAWebVoipCall(
-  peerWid: Wid,
-  isVideo: boolean,
-  callFromUi: number,
-  lobbyEntryPoint: number,
-  callId?: string | null,
-  options?: { entryTrust?: 'user_gesture' | 'deep_link' }
-): Promise<any>;
+export type GroupMutationParticipant =
+  | { phoneNumber: Wid; lid?: Wid; username?: string }
+  | { lid: Wid; username: string; phoneNumber?: Wid };
+
+export declare function getGroupMutationParticipant(
+  contact: ContactModel,
+  isLidAddressingMode: boolean,
+  context: string
+): GroupMutationParticipant;
 
 exportModule(
   exports,
-  {
-    startWAWebVoipCall: 'startWAWebVoipCall',
-  },
-  (m) => m.startWAWebVoipCall
+  { getGroupMutationParticipant: 'getGroupMutationParticipant' },
+  (m) => m.getGroupMutationParticipant
 );
